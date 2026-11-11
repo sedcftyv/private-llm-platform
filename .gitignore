@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Runtime artifacts
+artifacts/day1/*.log
+artifacts/day1/*.pid
+
+# Local secrets
+.env
+.env.*
+!.env.example

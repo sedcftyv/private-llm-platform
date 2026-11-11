@@ -1,0 +1,26 @@
+2026-11-12T00:53:07+08:00
+Linux DESKTOP-52TNF6J 6.18.58.1-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026 x86_64 GNU/Linux
+NVIDIA GeForce RTX 2080 Ti, 22528 MiB, 610.88, 7.5, 280.00 W
+{
+  "python": "3.12.16",
+  "platform": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+  "torch": "2.14.0+cu130",
+  "torch_cuda": "13.0",
+  "vllm": "0.33.0rc1.dev1051+gfd0c471b3",
+  "cuda_available": true,
+  "gpu": "NVIDIA GeForce RTX 2080 Ti",
+  "capability": [
+    7,
+    5
+  ],
+  "memory_gib": 22.0
+}
+W1112 00:53:09.704000 20440 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1112 00:53:09.704000 20440 torch/_library/opaque_object.py:288] register_opaque_type is deprecated, use register_custom_class instead
+W1112 00:53:09.705000 20440 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+0.33.0rc1.dev1051+gfd0c471b3.precompiled
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+{'config_class': 'Qwen3Config', 'model_type': 'qwen3', 'architectures': ['Qwen3ForCausalLM'], 'declared_dtype': 'torch.bfloat16', 'tokenizer_class': 'Qwen2Tokenizer', 'vocab_size': 151643}
+7.6G	/home/aida/vllm/Qwen3-4B
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdd       1007G   51G  905G   6% /
