@@ -2,7 +2,8 @@
 
 基于 vLLM、Qwen3-4B、RAG、评测与监控的私有化大模型平台项目。
 
-当前进度：Day 1 已完成——环境固定、Qwen3-4B 服务和生成请求均已验证。
+当前进度：Day 2 已完成——FastAPI 网关、健康检查以及普通/流式 Chat
+Completions 转发均已验证。
 
 完整计划见
 [`vllm_serving_lab_project_plan.md`](vllm_serving_lab_project_plan.md)。
@@ -42,3 +43,29 @@
 - 服务日志中没有 OOM、dtype 或模型架构错误。
 
 Day 1 实测结果见 [`artifacts/day1/README.md`](artifacts/day1/README.md)。
+
+## Day 2
+
+安装网关开发环境：
+
+```bash
+uv sync --dev
+```
+
+先启动 Day 1 的 vLLM 服务，再启动网关：
+
+```bash
+./scripts/start_vllm_o0.sh
+./scripts/start_gateway.sh
+```
+
+网关监听 `127.0.0.1:8080`，上游 vLLM 地址为 `127.0.0.1:8000`。
+
+运行测试：
+
+```bash
+.venv/bin/python -m pytest -v
+.venv/bin/python scripts/gateway_smoke_test.py
+```
+
+Day 2 实测结果见 [`artifacts/day2/README.md`](artifacts/day2/README.md)。
