@@ -11,6 +11,11 @@ artifacts/day2/*.log
 artifacts/day2/*.pid
 artifacts/day3/*.log
 artifacts/day3/*.pid
+artifacts/day4/*.log
+artifacts/day4/*.pid
+
+# Rebuildable local vector indexes
+data/knowledge_base/
 
 # Local secrets
 .env

@@ -1,0 +1,6 @@
+Day 4 embedding smoke test passed
+model: bge-small-zh-v1.5
+batch size: 2
+dimensions: 512
+float and base64 formats: passed
+prompt tokens: 26

@@ -1,13 +1,16 @@
 """Tests for the HTTP gateway and logical model routes."""
 
+import base64
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import httpx
+import numpy as np
 from fastapi.testclient import TestClient
 
 from private_llm_platform.gateway.app import create_app
 from private_llm_platform.gateway.config import GatewaySettings
+from private_llm_platform.knowledge.embedding import EmbeddingResult
 
 
 class MockAsyncByteStream(httpx.AsyncByteStream):
@@ -19,10 +22,29 @@ class MockAsyncByteStream(httpx.AsyncByteStream):
             yield chunk
 
 
-def make_client(handler: httpx.MockTransport) -> TestClient:
+class FakeEmbeddingBackend:
+    model_name = "bge-small-zh-v1.5"
+
+    def encode_documents(self, texts: Sequence[str]) -> EmbeddingResult:
+        vectors = np.asarray(
+            [[float(index + 1), 0.5, -0.5] for index, _ in enumerate(texts)],
+            dtype=np.float32,
+        )
+        return EmbeddingResult(vectors=vectors, prompt_tokens=7 * len(texts))
+
+    def encode_queries(self, texts: Sequence[str]) -> EmbeddingResult:
+        return self.encode_documents(texts)
+
+
+def make_client(
+    handler: httpx.MockTransport,
+    *,
+    embedding_backend: FakeEmbeddingBackend | None = None,
+) -> TestClient:
     app = create_app(
         GatewaySettings(upstream_base_url="http://upstream.test"),
         upstream_transport=handler,
+        embedding_backend=embedding_backend,
     )
     return TestClient(app)
 
@@ -65,17 +87,102 @@ def test_ready_reports_unavailable_upstream() -> None:
     }
 
 
-def test_models_lists_only_logical_routes() -> None:
+def test_models_lists_registered_generation_and_embedding_models() -> None:
     transport = httpx.MockTransport(lambda _: httpx.Response(500))
     with make_client(transport) as client:
         response = client.get("/v1/models")
 
     assert response.status_code == 200
     assert [model["id"] for model in response.json()["data"]] == [
+        "bge-small-zh-v1.5",
         "qwen3-fast",
         "qwen3-reasoning",
     ]
     assert all(isinstance(model["created"], int) for model in response.json()["data"])
+
+
+def test_embeddings_returns_openai_compatible_float_vectors() -> None:
+    transport = httpx.MockTransport(lambda _: httpx.Response(500))
+    with make_client(
+        transport,
+        embedding_backend=FakeEmbeddingBackend(),
+    ) as client:
+        response = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "bge-small-zh-v1.5",
+                "input": ["住宿费如何报销", "账号异常怎么办"],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "index": 0, "embedding": [1.0, 0.5, -0.5]},
+            {"object": "embedding", "index": 1, "embedding": [2.0, 0.5, -0.5]},
+        ],
+        "model": "bge-small-zh-v1.5",
+        "usage": {"prompt_tokens": 14, "total_tokens": 14},
+    }
+
+
+def test_embeddings_supports_base64_encoding() -> None:
+    transport = httpx.MockTransport(lambda _: httpx.Response(500))
+    with make_client(
+        transport,
+        embedding_backend=FakeEmbeddingBackend(),
+    ) as client:
+        response = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "bge-small-zh-v1.5",
+                "input": "住宿费如何报销",
+                "encoding_format": "base64",
+            },
+        )
+
+    encoded = response.json()["data"][0]["embedding"]
+    vector = np.frombuffer(base64.b64decode(encoded), dtype="<f4")
+    assert response.status_code == 200
+    assert vector.tolist() == [1.0, 0.5, -0.5]
+
+
+def test_embeddings_rejects_token_ids_and_unknown_model() -> None:
+    transport = httpx.MockTransport(lambda _: httpx.Response(500))
+    with make_client(
+        transport,
+        embedding_backend=FakeEmbeddingBackend(),
+    ) as client:
+        token_response = client.post(
+            "/v1/embeddings",
+            json={"model": "bge-small-zh-v1.5", "input": [1, 2, 3]},
+        )
+        model_response = client.post(
+            "/v1/embeddings",
+            json={"model": "unknown", "input": "hello"},
+        )
+        missing_model_response = client.post(
+            "/v1/embeddings",
+            json={"input": "hello"},
+        )
+        dimensions_response = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "bge-small-zh-v1.5",
+                "input": "hello",
+                "dimensions": 2,
+            },
+        )
+
+    assert token_response.status_code == 400
+    assert token_response.json()["error"]["code"] == "INVALID_REQUEST"
+    assert model_response.status_code == 404
+    assert model_response.json()["error"]["code"] == "MODEL_NOT_FOUND"
+    assert missing_model_response.status_code == 400
+    assert missing_model_response.json()["error"]["code"] == "INVALID_REQUEST"
+    assert dimensions_response.status_code == 400
+    assert dimensions_response.json()["error"]["code"] == "UNSUPPORTED_DIMENSIONS"
 
 
 def test_non_streaming_chat_completion_is_forwarded() -> None:

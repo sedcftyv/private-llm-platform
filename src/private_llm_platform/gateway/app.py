@@ -1,5 +1,6 @@
-"""FastAPI gateway for an OpenAI-compatible vLLM backend."""
+"""FastAPI gateway for generation and embedding backends."""
 
+import base64
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from time import time
@@ -9,6 +10,13 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
+
+from private_llm_platform.knowledge.embedding import (
+    EmbeddingBackend,
+    EmbeddingBackendError,
+    SentenceTransformerEmbeddingBackend,
+)
 
 from .config import GatewaySettings
 from .routing import ModelRegistry, ModelRoute
@@ -61,6 +69,7 @@ def create_app(
     *,
     upstream_transport: httpx.AsyncBaseTransport | httpx.BaseTransport | None = None,
     model_registry: ModelRegistry | None = None,
+    embedding_backend: EmbeddingBackend | None = None,
 ) -> FastAPI:
     """Create a gateway application.
 
@@ -68,6 +77,7 @@ def create_app(
         settings: Gateway configuration. Environment variables are used when omitted.
         upstream_transport: Optional HTTPX transport used by tests.
         model_registry: Optional logical model registry used by tests.
+        embedding_backend: Optional embedding backend used by tests.
 
     Returns:
         Configured FastAPI application.
@@ -78,6 +88,13 @@ def create_app(
         ModelRegistry.from_file(resolved_settings.model_registry_path)
         if resolved_settings.model_registry_path
         else ModelRegistry.default()
+    )
+    resolved_embedding_backend = embedding_backend or (
+        SentenceTransformerEmbeddingBackend(
+            resolved_settings.embedding_model_path,
+            model_name=resolved_settings.embedding_model_name,
+            device=resolved_settings.embedding_device,
+        )
     )
     registry_created = int(time())
 
@@ -148,6 +165,9 @@ def create_app(
 
     @application.get("/v1/models")
     async def list_models() -> dict[str, Any]:
+        model_names = sorted(
+            {*resolved_registry.names, resolved_embedding_backend.model_name}
+        )
         return {
             "object": "list",
             "data": [
@@ -157,9 +177,176 @@ def create_app(
                     "created": registry_created,
                     "owned_by": "private-llm-platform",
                 }
-                for name in resolved_registry.names
+                for name in model_names
             ],
         }
+
+    @application.post("/v1/embeddings")
+    async def create_embeddings(request: Request) -> Response:
+        request_id = _request_id(request)
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Request body must be valid JSON",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        if not isinstance(payload, dict):
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Request body must be a JSON object",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        model = payload.get("model")
+        if not isinstance(model, str) or not model:
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Request field 'model' must be a non-empty string",
+                request_id=request_id,
+                retryable=False,
+            )
+        if model != resolved_embedding_backend.model_name:
+            return _error_response(
+                status_code=404,
+                code="MODEL_NOT_FOUND",
+                message=f"The model {model!r} does not exist",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        raw_input = payload.get("input")
+        if isinstance(raw_input, str):
+            inputs = [raw_input]
+        elif (
+            isinstance(raw_input, list)
+            and raw_input
+            and len(raw_input) <= 2048
+            and all(isinstance(item, str) for item in raw_input)
+        ):
+            inputs = raw_input
+        else:
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message=(
+                    "Request field 'input' must be a string "
+                    "or non-empty string array"
+                ),
+                request_id=request_id,
+                retryable=False,
+            )
+
+        if any(not text.strip() for text in inputs):
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Embedding inputs must not be empty",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        encoding_format = payload.get("encoding_format", "float")
+        if encoding_format not in {"float", "base64"}:
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="encoding_format must be 'float' or 'base64'",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        if "user" in payload and not isinstance(payload["user"], str):
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Request field 'user' must be a string",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        dimensions = payload.get("dimensions")
+        if dimensions is not None and (
+            isinstance(dimensions, bool)
+            or not isinstance(dimensions, int)
+            or dimensions <= 0
+        ):
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Request field 'dimensions' must be a positive integer",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        try:
+            result = await run_in_threadpool(
+                resolved_embedding_backend.encode_documents,
+                inputs,
+            )
+        except EmbeddingBackendError:
+            return _error_response(
+                status_code=503,
+                code="EMBEDDING_UNAVAILABLE",
+                message="Embedding backend is unavailable",
+                request_id=request_id,
+                retryable=True,
+            )
+
+        if result.vectors.ndim != 2 or result.vectors.shape[0] != len(inputs):
+            return _error_response(
+                status_code=503,
+                code="EMBEDDING_UNAVAILABLE",
+                message="Embedding backend returned an invalid vector batch",
+                request_id=request_id,
+                retryable=True,
+            )
+
+        actual_dimensions = result.vectors.shape[1]
+        if dimensions is not None and dimensions != actual_dimensions:
+            return _error_response(
+                status_code=400,
+                code="UNSUPPORTED_DIMENSIONS",
+                message=f"This model only supports {actual_dimensions} dimensions",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        data: list[dict[str, Any]] = []
+        for index, vector in enumerate(result.vectors):
+            embedding: list[float] | str
+            if encoding_format == "base64":
+                embedding = base64.b64encode(
+                    vector.astype("<f4", copy=False).tobytes()
+                ).decode("ascii")
+            else:
+                embedding = vector.tolist()
+            data.append(
+                {
+                    "object": "embedding",
+                    "index": index,
+                    "embedding": embedding,
+                }
+            )
+
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": data,
+                "model": resolved_embedding_backend.model_name,
+                "usage": {
+                    "prompt_tokens": result.prompt_tokens,
+                    "total_tokens": result.prompt_tokens,
+                },
+            }
+        )
 
     @application.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:

@@ -1,0 +1,35 @@
+[
+  {
+    "chunk_id": "travel-policy-c187f0db1bf7",
+    "document_id": "travel-policy",
+    "document_title": "差旅报销制度",
+    "section": "住宿费超标处理",
+    "content": "因展会、极端天气或协议酒店满房导致住宿费超过标准时，员工应提交书面情况说明，附酒店价格或满房证明，并由部门负责人和财务负责人审批。没有说明和审批记录的超标部分由员工个人承担。",
+    "source_path": "documents/travel_policy.md",
+    "version": "2026-11",
+    "retrieval_score": 0.7390904426574707,
+    "rank": 1
+  },
+  {
+    "chunk_id": "travel-policy-b2086ee38ba6",
+    "document_id": "travel-policy",
+    "document_title": "差旅报销制度",
+    "section": "报销时限",
+    "content": "员工应在行程结束后的十五个工作日内提交报销申请。申请材料包括出差审批单、发票、住宿清单以及必要的情况说明。",
+    "source_path": "documents/travel_policy.md",
+    "version": "2026-11",
+    "retrieval_score": 0.6095039248466492,
+    "rank": 2
+  },
+  {
+    "chunk_id": "travel-policy-7b13223992f0",
+    "document_id": "travel-policy",
+    "document_title": "差旅报销制度",
+    "section": "住宿标准",
+    "content": "员工应优先选择公司协议酒店。住宿费用在所在城市规定标准以内的，凭合规发票和住宿清单据实报销。",
+    "source_path": "documents/travel_policy.md",
+    "version": "2026-11",
+    "retrieval_score": 0.6026511192321777,
+    "rank": 3
+  }
+]

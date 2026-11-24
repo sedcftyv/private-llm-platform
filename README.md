@@ -2,8 +2,8 @@
 
 基于 vLLM、Qwen3-4B、RAG、评测与监控的私有化大模型平台项目。
 
-当前进度：Day 3 已完成——FastAPI 网关支持逻辑模型注册、fast/reasoning
-能力路由，以及普通/流式 Chat Completions 转发。
+当前进度：Day 4 已完成——FastAPI 网关支持逻辑模型注册、fast/reasoning
+能力路由、BGE Embedding，以及 Markdown/TXT 到 FAISS 的可检索知识库。
 
 完整计划见
 [`vllm_serving_lab_project_plan.md`](vllm_serving_lab_project_plan.md)。
@@ -109,3 +109,41 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 也可以通过 `LLM_MODEL_REGISTRY_PATH` 指向自定义 TOML 注册表。Day 3 实测结果见
 [`artifacts/day3/README.md`](artifacts/day3/README.md)。
+
+## Day 4
+
+Embedding 使用 `BAAI/bge-small-zh-v1.5`，固定在 CPU 上运行，避免与 Qwen3-4B
+争用 GPU。项目使用 CPU-only PyTorch wheel，不安装 CUDA、cuDNN 或 Triton 依赖。
+
+构建示例知识库：
+
+```bash
+.venv/bin/python scripts/build_knowledge_base.py documents \
+  --output data/knowledge_base
+```
+
+查询 FAISS 索引：
+
+```bash
+.venv/bin/python scripts/search_knowledge_base.py \
+  '住宿费超标时需要提交什么材料并经过谁审批？' \
+  --index data/knowledge_base \
+  --limit 5
+```
+
+网关还提供 OpenAI-compatible Embedding 接口：
+
+```bash
+curl http://127.0.0.1:8080/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "bge-small-zh-v1.5",
+    "input": ["住宿费超标如何处理？", "账号异常登录怎么办？"]
+  }'
+```
+
+接口支持字符串或字符串数组，以及 `float`、`base64` 两种编码格式。Embedding
+模型路径可用 `EMBEDDING_MODEL_PATH` 修改，设备可用 `EMBEDDING_DEVICE` 修改；默认
+配置坚持使用 CPU。
+
+Day 4 实测结果见 [`artifacts/day4/README.md`](artifacts/day4/README.md)。

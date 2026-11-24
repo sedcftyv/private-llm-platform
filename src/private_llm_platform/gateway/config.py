@@ -24,6 +24,9 @@ class GatewaySettings:
     connect_timeout_seconds: float = 5.0
     read_timeout_seconds: float = 120.0
     model_registry_path: Path | None = None
+    embedding_model_name: str = "bge-small-zh-v1.5"
+    embedding_model_path: str = "BAAI/bge-small-zh-v1.5"
+    embedding_device: str = "cpu"
 
     @classmethod
     def from_env(cls) -> "GatewaySettings":
@@ -47,4 +50,13 @@ class GatewaySettings:
                 if (path := os.getenv("LLM_MODEL_REGISTRY_PATH"))
                 else None
             ),
+            embedding_model_name=os.getenv(
+                "EMBEDDING_MODEL_NAME",
+                "bge-small-zh-v1.5",
+            ),
+            embedding_model_path=os.getenv(
+                "EMBEDDING_MODEL_PATH",
+                "BAAI/bge-small-zh-v1.5",
+            ),
+            embedding_device=os.getenv("EMBEDDING_DEVICE", "cpu"),
         )
