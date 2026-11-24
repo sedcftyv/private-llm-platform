@@ -1,4 +1,4 @@
-"""Tests for the Day 2 HTTP gateway."""
+"""Tests for the HTTP gateway and logical model routes."""
 
 import json
 from collections.abc import AsyncIterator
@@ -65,12 +65,30 @@ def test_ready_reports_unavailable_upstream() -> None:
     }
 
 
+def test_models_lists_only_logical_routes() -> None:
+    transport = httpx.MockTransport(lambda _: httpx.Response(500))
+    with make_client(transport) as client:
+        response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    assert [model["id"] for model in response.json()["data"]] == [
+        "qwen3-fast",
+        "qwen3-reasoning",
+    ]
+    assert all(isinstance(model["created"], int) for model in response.json()["data"])
+
+
 def test_non_streaming_chat_completion_is_forwarded() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/chat/completions"
         assert request.headers["x-request-id"] == "request-123"
         payload = json.loads(request.content)
         assert payload["model"] == "qwen3-4b"
+        assert payload["chat_template_kwargs"] == {
+            "custom_option": "preserved",
+            "enable_thinking": False,
+        }
+        assert request.extensions["timeout"]["read"] == 60.0
         return httpx.Response(
             200,
             json={
@@ -86,8 +104,12 @@ def test_non_streaming_chat_completion_is_forwarded() -> None:
             "/v1/chat/completions",
             headers={"x-request-id": "request-123"},
             json={
-                "model": "qwen3-4b",
+                "model": "qwen3-fast",
                 "messages": [{"role": "user", "content": "hi"}],
+                "chat_template_kwargs": {
+                    "custom_option": "preserved",
+                    "enable_thinking": True,
+                },
             },
         )
 
@@ -95,6 +117,65 @@ def test_non_streaming_chat_completion_is_forwarded() -> None:
     assert response.json()["choices"][0]["message"]["content"] == "hello"
     assert response.headers["x-request-id"] == "request-123"
     assert response.headers["x-upstream-status"] == "200"
+    assert response.headers["x-model-route"] == "qwen3-fast"
+    assert response.headers["x-model-backend"] == "qwen3"
+    assert response.headers["x-upstream-model"] == "qwen3-4b"
+    assert response.headers["x-thinking-enabled"] == "false"
+
+
+def test_reasoning_route_enables_thinking() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["model"] == "qwen3-4b"
+        assert payload["chat_template_kwargs"]["enable_thinking"] is True
+        assert request.extensions["timeout"]["read"] == 120.0
+        return httpx.Response(200, json={"choices": []})
+
+    with make_client(httpx.MockTransport(handler)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen3-reasoning",
+                "messages": [{"role": "user", "content": "hi"}],
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-model-route"] == "qwen3-reasoning"
+    assert response.headers["x-thinking-enabled"] == "true"
+
+
+def test_unknown_model_is_rejected_without_calling_upstream() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("upstream must not be called")
+
+    with make_client(httpx.MockTransport(handler)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "unknown-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "MODEL_NOT_FOUND"
+    assert response.json()["error"]["retryable"] is False
+
+
+def test_missing_model_is_rejected_without_calling_upstream() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("upstream must not be called")
+
+    with make_client(httpx.MockTransport(handler)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
 
 
 def test_chat_completion_reports_unavailable_upstream() -> None:
@@ -105,7 +186,7 @@ def test_chat_completion_reports_unavailable_upstream() -> None:
         response = client.post(
             "/v1/chat/completions",
             json={
-                "model": "qwen3-4b",
+                "model": "qwen3-fast",
                 "messages": [{"role": "user", "content": "hi"}],
             },
         )
@@ -125,6 +206,8 @@ def test_streaming_chat_completion_preserves_sse_body() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         assert payload["stream"] is True
+        assert payload["model"] == "qwen3-4b"
+        assert payload["chat_template_kwargs"]["enable_thinking"] is False
         return httpx.Response(
             200,
             stream=MockAsyncByteStream(
@@ -137,7 +220,7 @@ def test_streaming_chat_completion_preserves_sse_body() -> None:
         "POST",
         "/v1/chat/completions",
         json={
-            "model": "qwen3-4b",
+            "model": "qwen3-fast",
             "messages": [{"role": "user", "content": "hi"}],
             "stream": True,
         },
@@ -146,6 +229,7 @@ def test_streaming_chat_completion_preserves_sse_body() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-model-route"] == "qwen3-fast"
     assert body == sse_body
 
 

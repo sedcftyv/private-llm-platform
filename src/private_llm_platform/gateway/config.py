@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 def _positive_float(name: str, default: float) -> float:
@@ -22,6 +23,7 @@ class GatewaySettings:
     upstream_base_url: str = "http://127.0.0.1:8000"
     connect_timeout_seconds: float = 5.0
     read_timeout_seconds: float = 120.0
+    model_registry_path: Path | None = None
 
     @classmethod
     def from_env(cls) -> "GatewaySettings":
@@ -39,5 +41,10 @@ class GatewaySettings:
             read_timeout_seconds=_positive_float(
                 "LLM_UPSTREAM_READ_TIMEOUT_SECONDS",
                 120.0,
+            ),
+            model_registry_path=(
+                Path(path)
+                if (path := os.getenv("LLM_MODEL_REGISTRY_PATH"))
+                else None
             ),
         )

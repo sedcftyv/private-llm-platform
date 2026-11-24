@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from time import time
 from typing import Any
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .config import GatewaySettings
+from .routing import ModelRegistry, ModelRoute
 
 
 def _request_id(request: Request) -> str:
@@ -37,8 +39,17 @@ def _error_response(
     )
 
 
-def _response_headers(response: httpx.Response) -> dict[str, str]:
-    headers = {"x-upstream-status": str(response.status_code)}
+def _response_headers(
+    response: httpx.Response,
+    route: ModelRoute,
+) -> dict[str, str]:
+    headers = {
+        "x-upstream-status": str(response.status_code),
+        "x-model-route": route.name,
+        "x-model-backend": route.backend,
+        "x-upstream-model": route.upstream_model,
+        "x-thinking-enabled": str(route.enable_thinking).lower(),
+    }
     content_type = response.headers.get("content-type")
     if content_type:
         headers["content-type"] = content_type
@@ -49,18 +60,26 @@ def create_app(
     settings: GatewaySettings | None = None,
     *,
     upstream_transport: httpx.AsyncBaseTransport | httpx.BaseTransport | None = None,
+    model_registry: ModelRegistry | None = None,
 ) -> FastAPI:
     """Create a gateway application.
 
     Args:
         settings: Gateway configuration. Environment variables are used when omitted.
         upstream_transport: Optional HTTPX transport used by tests.
+        model_registry: Optional logical model registry used by tests.
 
     Returns:
         Configured FastAPI application.
     """
 
     resolved_settings = settings or GatewaySettings.from_env()
+    resolved_registry = model_registry or (
+        ModelRegistry.from_file(resolved_settings.model_registry_path)
+        if resolved_settings.model_registry_path
+        else ModelRegistry.default()
+    )
+    registry_created = int(time())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -127,6 +146,21 @@ def create_app(
             )
         return JSONResponse({"status": "ready"})
 
+    @application.get("/v1/models")
+    async def list_models() -> dict[str, Any]:
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": name,
+                    "object": "model",
+                    "created": registry_created,
+                    "owned_by": "private-llm-platform",
+                }
+                for name in resolved_registry.names
+            ],
+        }
+
     @application.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
         request_id = _request_id(request)
@@ -150,18 +184,44 @@ def create_app(
                 retryable=False,
             )
 
+        requested_model = payload.get("model")
+        if not isinstance(requested_model, str) or not requested_model:
+            return _error_response(
+                status_code=400,
+                code="INVALID_REQUEST",
+                message="Request field 'model' must be a non-empty string",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        route = resolved_registry.get(requested_model)
+        if route is None:
+            return _error_response(
+                status_code=404,
+                code="MODEL_NOT_FOUND",
+                message=f"The model {requested_model!r} does not exist",
+                request_id=request_id,
+                retryable=False,
+            )
+
+        upstream_payload = route.apply(payload)
+
         client: httpx.AsyncClient = request.app.state.upstream_client
         upstream_request = client.build_request(
             "POST",
             "/v1/chat/completions",
-            json=payload,
+            json=upstream_payload,
             headers={"x-request-id": request_id},
+            timeout=httpx.Timeout(
+                route.timeout_seconds,
+                connect=resolved_settings.connect_timeout_seconds,
+            ),
         )
 
         try:
             upstream_response = await client.send(
                 upstream_request,
-                stream=bool(payload.get("stream")),
+                stream=bool(upstream_payload.get("stream")),
             )
         except httpx.TimeoutException:
             return _error_response(
@@ -180,8 +240,8 @@ def create_app(
                 retryable=True,
             )
 
-        headers = _response_headers(upstream_response)
-        if not payload.get("stream"):
+        headers = _response_headers(upstream_response, route)
+        if not upstream_payload.get("stream"):
             return Response(
                 content=upstream_response.content,
                 status_code=upstream_response.status_code,

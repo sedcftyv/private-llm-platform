@@ -1,0 +1,4 @@
+Day 3 gateway routing smoke test passed
+non-streaming response: 模型网关的作用是统一管理、调度和安全控制AI模型的服务调用，实现模型的高效、可靠和可扩展部署。
+streaming response: 模型网关的作用是统一管理、调度和安全控制AI模型的服务调用，实现模型的高效、可靠和可扩展部署。
+reasoning response: thinking enabled; final answer 323

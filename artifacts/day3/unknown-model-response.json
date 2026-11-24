@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "MODEL_NOT_FOUND",
+    "message": "The model 'unknown-model' does not exist",
+    "request_id": "day3-unknown-model",
+    "retryable": false
+  }
+}

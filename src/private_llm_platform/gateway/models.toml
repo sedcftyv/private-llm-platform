@@ -1,0 +1,11 @@
+[models.qwen3-fast]
+backend = "qwen3"
+upstream_model = "qwen3-4b"
+enable_thinking = false
+timeout_seconds = 60
+
+[models.qwen3-reasoning]
+backend = "qwen3"
+upstream_model = "qwen3-4b"
+enable_thinking = true
+timeout_seconds = 120
